@@ -12,7 +12,7 @@ Model Inversion Attack aims to reconstruct private images from their feature vec
 
 ### Hardware Requirements
 
-Any Nvidia GPU with 8GB or larger memory is enough. Larger GPU memory and system memory is better. The system memory should be larger than 16GB, 32GB+ is better for generating more feature vectors and read all the datasets. The experiments were performed on a PC with a Nvidia RTX 3080 GPU. The code supports both Windows and Linux environment.
+Any Nvidia GPU with 8GB or larger memory is enough. Larger GPU memory and system memory is better.  The experiments were performed on a PC with a Nvidia RTX 3080 GPU. The code supports both Windows and Linux environment.
 
 ### Required Runtime Libraries
 
