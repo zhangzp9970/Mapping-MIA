@@ -2,26 +2,16 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import DataLoader, random_split, Subset, ConcatDataset
+from torch.utils.data import DataLoader, random_split
 from torchvision.datasets import *
 from torchvision.transforms.v2 import *
 from torchvision.transforms.v2.functional import *
 from tqdm import tqdm
-from torchplus.datasets import PreProcessFolder
-from torchplus.models import ResNetFE, ResNet50FE_Dim, resnet50fe
+from torchplus.models import ResNet50FE_Dim, resnet50fe
 from torchplus.utils import (
     Init,
-    ClassificationAccuracy,
-    class_split,
-    save_excel,
-    MMD,
     save_image2,
-    hash_code,
-    model_size,
 )
-from piq import SSIMLoss
-import argparse
 
 if __name__ == "__main__":
     batch_size = 16
