@@ -26,7 +26,7 @@ The LPIPS score is calculated using the [lpips library](https://github.com/richz
 
 The FID score is calculated using the [pytorch-fid program](https://github.com/mseitzer/pytorch-fid) (`pip install pytorch-fid`).
 
-The TFLOPS score is calculated using the ` fvcore.nn.FlopCountAnalysis` function (`pip install fvcore`).
+The TFLOPS score is calculated using the  `fvcore.nn.FlopCountAnalysis` function (`pip install fvcore`).
 
 The model parameters are calculated using the following code.
 
