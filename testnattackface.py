@@ -1,0 +1,227 @@
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import DataLoader, random_split, Subset, ConcatDataset
+from torchvision.datasets import *
+from torchvision.transforms.v2 import *
+from torchvision.transforms.v2.functional import *
+from tqdm import tqdm
+from torchplus.datasets import PreProcessFolder
+from torchplus.models import ResNetFE, ResNet50FE_Dim, resnet50fe
+from torchplus.utils import (
+    Init,
+    ClassificationAccuracy,
+    class_split,
+    save_excel,
+    MMD,
+    save_image2,
+    hash_code,
+    model_size,
+)
+from piq import SSIMLoss
+import argparse
+
+if __name__ == "__main__":
+    batch_size = 16
+    class_num = 530
+    root_dir = "./log/paper5w/logZZPMAIN.testnattackface.resnet"
+    target_feature_pkl = "/path/to/feature_extractor.pkl"
+    ae_inv_pkl = "/path/to/myinversion.pkl"
+    newfe_pkl = "/path/to/newfe.pkl"
+    dataset_dir = "/path/to/FaceScrub/dataset"
+    h = 224
+    w = 224
+
+    init = Init(
+        seed=9970,
+        log_root_dir=root_dir,
+        sep=False,
+        backup_filename=__file__,
+        tensorboard=True,
+        comment=f"test FaceScrub newfe attack norm resnet50 128pix cossim 8e",
+    )
+    output_device = init.get_device()
+    writer = init.get_writer()
+    log_dir = init.get_log_dir()
+    data_workers = 2
+
+    transform = Compose(
+        [
+            Resize((h, w)),
+            ToImage(),
+            ToDtype(torch.float, scale=True),
+        ]
+    )
+
+    ds = ImageFolder(root=dataset_dir, transform=transform)
+
+    ds_len = len(ds)
+
+    priv_ds, aux_ds = random_split(ds, [ds_len * 1 // 2, ds_len - ds_len * 1 // 2])
+
+    aux_ds_len = len(aux_ds)
+
+    aux_train_ds, aux_test_ds = random_split(
+        aux_ds, [aux_ds_len * 6 // 7, aux_ds_len - aux_ds_len * 6 // 7]
+    )
+
+    train_ds = aux_train_ds
+    test_ds = aux_test_ds
+
+    train_ds_len = len(train_ds)
+    test_ds_len = len(test_ds)
+
+    print(train_ds_len)
+    print(test_ds_len)
+
+    # for evaluate
+    train_dl = DataLoader(
+        dataset=train_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=data_workers,
+        drop_last=False,
+        pin_memory=True,
+    )
+    # for attack
+    test_dl = DataLoader(
+        dataset=test_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=data_workers,
+        drop_last=False,
+        pin_memory=True,
+    )
+
+    priv_dl = DataLoader(
+        dataset=priv_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=data_workers,
+        drop_last=False,
+        pin_memory=True,
+    )
+
+    class NewFE(nn.Module):
+        def __init__(self, in_dim, out_dim) -> None:
+            super(NewFE, self).__init__()
+            self.fc1 = nn.Linear(in_dim, 2048)
+            self.fc2 = nn.Linear(2048, out_dim)
+            self.lrelu1 = nn.LeakyReLU()
+            self.lrelu2 = nn.LeakyReLU()
+
+        def forward(self, x):
+            x = self.fc1(x)
+            x = self.lrelu1(x)
+            x = self.fc2(x)
+            x = self.lrelu2(x)
+            # x = self.fc3(x)
+            return x
+
+    class AEInversion(nn.Module):
+        def __init__(self, in_channels):
+            super(AEInversion, self).__init__()
+            self.in_channels = in_channels
+            self.deconv1 = nn.ConvTranspose2d(self.in_channels, 512, 4, 1)
+            self.deconv2 = nn.ConvTranspose2d(512, 256, 4, 2, 1)
+            self.deconv3 = nn.ConvTranspose2d(256, 128, 4, 2, 1)
+            self.deconv4 = nn.ConvTranspose2d(128, 64, 4, 2, 1)
+            self.deconv5 = nn.ConvTranspose2d(64, 32, 4, 2, 1)
+            self.deconv6 = nn.ConvTranspose2d(32, 3, 4, 2, 1)
+            self.bn1 = nn.BatchNorm2d(512)
+            self.bn2 = nn.BatchNorm2d(256)
+            self.bn3 = nn.BatchNorm2d(128)
+            self.bn4 = nn.BatchNorm2d(64)
+            self.bn5 = nn.BatchNorm2d(32)
+            self.relu1 = nn.ReLU()
+            self.relu2 = nn.ReLU()
+            self.relu3 = nn.ReLU()
+            self.relu4 = nn.ReLU()
+            self.relu5 = nn.ReLU()
+            self.sigmod = nn.Sigmoid()
+
+        def forward(self, x):
+            x = x.view(-1, self.in_channels, 1, 1)
+            x = self.deconv1(x)
+            x = self.bn1(x)
+            x = self.relu1(x)
+            x = self.deconv2(x)
+            x = self.bn2(x)
+            x = self.relu2(x)
+            x = self.deconv3(x)
+            x = self.bn3(x)
+            x = self.relu3(x)
+            x = self.deconv4(x)
+            x = self.bn4(x)
+            x = self.relu4(x)
+            x = self.deconv5(x)
+            x = self.bn5(x)
+            x = self.relu5(x)
+            x = self.deconv6(x)
+            x = self.sigmod(x)
+            return x
+
+    target_feature_extractor = resnet50fe().train(False).to(output_device)
+    newfe = NewFE(ResNet50FE_Dim, 8192).train(False).to(output_device)
+    aeinversion = AEInversion(8192).train(False).to(output_device)
+
+    assert os.path.exists(target_feature_pkl)
+    target_feature_extractor.load_state_dict(
+        torch.load(open(target_feature_pkl, "rb"), map_location=output_device)
+    )
+
+    assert os.path.exists(newfe_pkl)
+    newfe.load_state_dict(torch.load(open(newfe_pkl, "rb"), map_location=output_device))
+
+    assert os.path.exists(ae_inv_pkl)
+    aeinversion.load_state_dict(
+        torch.load(open(ae_inv_pkl, "rb"), map_location=output_device)
+    )
+
+    target_feature_extractor.requires_grad_(False)
+    newfe.requires_grad_(False)
+    aeinversion.requires_grad_(False)
+    
+    with torch.no_grad():
+        for i, (im, label) in enumerate(tqdm(train_dl, desc=f"export train")):
+            im = im.to(output_device)
+            label = label.to(output_device)
+            im2 = resize(im, 128, antialias=False)
+            bs, c, h, w = im.shape
+            target_feature8192 = target_feature_extractor.forward(im)
+            target_feature8192 = newfe.forward(target_feature8192)
+            target_feature8192 = F.normalize(target_feature8192)
+            rim = aeinversion.forward(target_feature8192)
+            save_image2(im2.detach(), f"{log_dir}/train/input/{i}.png", nrow=4)
+            save_image2(rim.detach(), f"{log_dir}/train/output/{i}.png", nrow=4)
+            break
+
+        for i, (im, label) in enumerate(tqdm(test_dl, desc=f"export test")):
+            im = im.to(output_device)
+            label = label.to(output_device)
+            im2 = resize(im, 128, antialias=False)
+            bs, c, h, w = im.shape
+            target_feature8192 = target_feature_extractor.forward(im)
+            target_feature8192 = newfe.forward(target_feature8192)
+            target_feature8192 = F.normalize(target_feature8192)
+            rim = aeinversion.forward(target_feature8192)
+            save_image2(im2.detach(), f"{log_dir}/test/input/{i}.png", nrow=4)
+            save_image2(rim.detach(), f"{log_dir}/test/output/{i}.png", nrow=4)
+            break
+
+        for i, (im, label) in enumerate(tqdm(priv_dl, desc=f"export priv")):
+            im = im.to(output_device)
+            label = label.to(output_device)
+            im2 = resize(im, 128, antialias=False)
+            bs, c, h, w = im.shape
+            target_feature8192 = target_feature_extractor.forward(im)
+            target_feature8192 = newfe.forward(target_feature8192)
+            target_feature8192 = F.normalize(target_feature8192)
+            rim = aeinversion.forward(target_feature8192)
+            save_image2(im2.detach(), f"{log_dir}/priv/input/{i}.png", nrow=4)
+            save_image2(rim.detach(), f"{log_dir}/priv/output/{i}.png", nrow=4)
+            break
+
+    writer.close()
